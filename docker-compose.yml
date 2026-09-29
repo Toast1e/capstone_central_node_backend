@@ -1,0 +1,32 @@
+services:
+
+  # Reads the LoRa gateway's serial output, stores readings in SQLite,
+  # serves the JSON API on port 8000 (internal only — NGINX proxies to it).
+  ingest:
+    build: ./ingest
+    restart: unless-stopped
+    devices:
+      # SERIAL_PORT comes from the .env file next to this compose file.
+      # The host device is mapped to a stable name inside the container.
+      - source: ${SERIAL_PORT}
+        target: /dev/lora
+        permissions: "rwm"
+    environment:
+      - SERIAL_PORT=/dev/lora
+      - BAUD=115200
+      - DB_PATH=/data/weather.db
+    volumes:
+      - weather-data:/data
+
+  # NGINX: serves the dashboard and reverse-proxies /api/ to the ingest
+  # service. The only port published on the Pi.
+  web:
+    build: ./web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - ingest
+
+volumes:
+  weather-data:
