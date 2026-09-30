@@ -1,18 +1,23 @@
 # Mildew station dashboard
 
 LoRa weather station → Heltec receiver on the Pi's USB port → Docker
-(ingest + NGINX) → local website.
+(ingest + NGINX) → the VitiSense PWA, served on the Pi's own Wi-Fi hotspot.
 
 ```
 [field node]                [ground station]              [Raspberry Pi 4B]
 SHT31 + DS3231              Heltec on USB                 Docker
   │  LoRa 868 MHz             │  NDJSON @115200             ├─ ingest: serial → SQLite → API :8000
-  └──────────────────────────►└────────────────────────────►└─ web: NGINX :80 → dashboard + /api proxy
+  └──────────────────────────►└────────────────────────────►└─ web: NGINX :80/:443 → PWA + /api proxy
 ```
 
 The sender firmware is unchanged — its JSON payload is already exactly what
-the gateway forwards. The SD card remains the record of truth; the dashboard
-is the live view.
+the gateway forwards. The SD card remains the record of truth; the app is
+the live view.
+
+The app itself lives in its own repo,
+[central_node_pwa](https://github.com/Toast1e/central_node_pwa). The `web`
+container builds it from a checkout next to this folder and serves it
+together with the API.
 
 ## 1. Flash the receiver
 
@@ -51,20 +56,42 @@ sudo usermod -aG docker $USER
 
 Verify: `docker --version` and `docker compose version` both answer.
 
-## 3. Copy this project to the Pi
+### Wi-Fi hotspot
 
-From your computer:
+Phones join the Pi's own Wi-Fi to use the app. Raspberry Pi OS's
+NetworkManager can run the hotspot, and hand out addresses to phones, by
+itself. **Do this over Ethernet (or with a keyboard and screen).** The Pi
+leaves its current Wi-Fi network when the hotspot starts.
 
 ```bash
-scp -r mildew-dashboard pi@<pi-ip>:~/
+sudo raspi-config    # Localisation Options → WLAN Country (the hotspot won't start without it)
+sudo nmcli device wifi hotspot ifname wlan0 con-name CentralNode ssid CentralNode password "<8+ characters>"
+sudo nmcli connection modify CentralNode connection.autoconnect yes connection.autoconnect-priority 100
 ```
+
+On the hotspot the Pi is `10.42.0.1`. From now on use Ethernet whenever the
+Pi needs internet (updates, building the images, renewing the certificate).
+
+## 3. Get the code onto the Pi
+
+The `web` container builds the app from `../central_node_pwa`, so clone
+both repos into the same folder:
+
+```bash
+mkdir -p ~/central-node && cd ~/central-node
+git clone https://github.com/Toast1e/capstone_central_node_backend.git
+git clone https://github.com/Toast1e/central_node_pwa.git
+```
+
+The app is built from whatever is checked out in `central_node_pwa`, so
+switch branches there if you're deploying one that isn't merged yet.
 
 ## 4. Point it at the receiver's serial port
 
 Plug the receiver into the Pi, then:
 
 ```bash
-cd ~/mildew-dashboard
+cd ~/central-node/capstone_central_node_backend
 ls -l /dev/serial/by-id/
 ```
 
@@ -84,7 +111,8 @@ nano .env      # SERIAL_PORT=/dev/serial/by-id/usb-...-if00
 docker compose up -d --build
 ```
 
-First build takes a few minutes on a Pi 4. Then:
+The first build downloads the app's npm packages and fonts, so the Pi needs
+internet. It takes several minutes on a Pi 4. Then:
 
 ```bash
 docker compose logs -f ingest
@@ -94,15 +122,54 @@ You should see `ingest: listening on /dev/lora @ 115200`, the gateway's
 boot lines tagged `[gw]`, and within 5 minutes
 `ingest: stored seq=... t=... rssi=...`.
 
-## 6. Open the dashboard
+`docker compose logs web` shows whether it's serving HTTP or HTTPS (next
+step).
 
-From any device on the same network:
+## 6. HTTPS (needed to install the app)
 
-- `http://<pi-ip>/`
-- or `http://raspberrypi.local/` (works from most laptops/phones via mDNS)
+Phones only install the app to the home screen, and only run its offline
+cache, when it's served over HTTPS with a certificate they trust. Put the
+certificate in `certs/` as `fullchain.pem` + `privkey.pem`, then run
+`docker compose restart web` (see [certs/README.md](certs/README.md)). There
+are two ways to get one:
 
-The page refreshes itself every minute. The link dot goes amber when no
-packet has arrived for ~11 min (two missed slots) and red after ~30 min.
+- **Own domain + Let's Encrypt (for real users).** Pick a name such as
+  `vitisense.example.com`. Get a certificate with certbot's **DNS-01**
+  challenge, which works even though the Pi isn't reachable from the
+  internet. certbot keeps it in `/etc/letsencrypt/live/<name>/` as symlinks,
+  so copy the files with `cp -L`. It lasts 90 days; renew it while the Pi
+  has internet. Then point the name at the Pi, both on the hotspot and in
+  public DNS. The public record is for Android, which sometimes looks names
+  up over mobile data instead of the hotspot:
+
+  ```bash
+  echo "address=/vitisense.example.com/10.42.0.1" | sudo tee /etc/NetworkManager/dnsmasq-shared.d/vitisense.conf
+  sudo nmcli connection up CentralNode
+  # and at your DNS provider: A record  vitisense.example.com → 10.42.0.1
+  ```
+
+- **mkcert (demos on your own phones).** On your computer:
+  `mkcert -install`, then
+  `mkcert -cert-file certs/fullchain.pem -key-file certs/privkey.pem 10.42.0.1`.
+  Copy the two files to the Pi's `certs/`. Every phone must install and
+  trust mkcert's root certificate (`mkcert -CAROOT` shows where it is) by
+  hand. On iPhone, also switch it on under Settings → General → About →
+  Certificate Trust Settings.
+
+## 7. Open and install the app
+
+Join the `CentralNode` Wi-Fi, then open the app in the browser:
+
+- `https://vitisense.example.com/` (your name) or `https://10.42.0.1/` (mkcert)
+- `http://10.42.0.1/` while there's no certificate
+
+To put the app icon on the home screen (HTTPS only):
+
+- **Android (Chrome):** ⋮ menu → *Install app*
+- **iPhone (Safari):** Share → *Add to Home Screen*
+
+Without HTTPS, *Add to Home Screen* still makes an icon, but it opens as an
+ordinary browser tab.
 
 ## API (if you want the raw data)
 
@@ -126,11 +193,14 @@ docker compose cp ingest:/data/weather.db ./weather-backup.db
 - **Receiver prints heartbeats but never a reading** — radio parameter
   mismatch. Diff the `#define LORA_*` block against the sender; every value
   (freq, BW, SF, CR, sync word, preamble) must be identical.
-- **Readings on serial but nothing in the dashboard** — check
+- **Readings on serial but nothing in the app** — check
   `docker compose logs ingest` for `bad JSON dropped` lines, and
   `curl http://localhost/api/status` on the Pi.
 - **Changed a file?** Rebuild the affected container:
   `docker compose up -d --build`.
+- **App changes don't show up** — the app is built into the `web` image.
+  Pull the PWA repo (`git -C ../central_node_pwa pull`), then
+  `docker compose up -d --build web`.
 - **Start over with a clean database**:
   `docker compose down -v && docker compose up -d`.
 
@@ -139,3 +209,8 @@ docker compose cp ingest:/data/weather.db ./weather-backup.db
 The dashboard charts by the Pi's clock (`received_at`, set by NTP), which is
 robust even if the field node's RTC drifts. The sender's own `ts` is stored
 alongside for cross-checking against the SD card CSVs.
+
+On the hotspot the Pi usually has no internet, so NTP can't set its clock,
+and the Pi 4 has no battery-backed clock. After a power cut it can be
+wrong. A DS3231 RTC module on the Pi's I²C pins keeps it right; enable it
+with `dtoverlay=i2c-rtc,ds3231` in `/boot/firmware/config.txt`.
