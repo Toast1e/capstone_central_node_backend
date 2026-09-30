@@ -31,7 +31,7 @@ BAUD = int(os.environ.get("BAUD", "115200"))
 DB_PATH = os.environ.get("DB_PATH", "/data/weather.db")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS readings (
+CREATE TABLE IF NOT EXISTS reading (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     received_at  INTEGER NOT NULL,          -- unix seconds, Pi clock (UTC)
     node         TEXT,
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS readings (
     rssi         REAL,
     snr          REAL
 );
-CREATE INDEX IF NOT EXISTS idx_readings_received ON readings (received_at);
+CREATE INDEX IF NOT EXISTS idx_reading_received ON reading (received_at);
 """
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ def init_db() -> None:
 def store_reading(conn: sqlite3.Connection, d: dict) -> None:
     now = int(time.time())
     conn.execute(
-        """INSERT INTO readings
+        """INSERT INTO reading
            (received_at, node, seq, ts, temp_c, humidity_pct, dewpoint_c,
             battery_v, battery_pct, sd, rssi, snr)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -172,7 +172,7 @@ def row_to_dict(row: sqlite3.Row) -> dict:
 def latest() -> dict:
     with db_connect() as conn:
         row = conn.execute(
-            "SELECT * FROM readings ORDER BY received_at DESC, id DESC LIMIT 1"
+            "SELECT * FROM reading ORDER BY received_at DESC, id DESC LIMIT 1"
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="No readings yet")
@@ -184,12 +184,12 @@ def history(hours: float = Query(24, gt=0, le=504)) -> dict:
     since = int(time.time() - hours * 3600)
     with db_connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM readings WHERE received_at >= ? "
+            "SELECT * FROM reading WHERE received_at >= ? "
             "ORDER BY received_at ASC",
             (since,),
         ).fetchall()
     return {"hours": hours, "count": len(rows),
-            "readings": [row_to_dict(r) for r in rows]}
+            "reading": [row_to_dict(r) for r in rows]}
 
 
 @app.get("/api/status")
