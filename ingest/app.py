@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS reading (
     sentAt       INTEGER,
     receivedAt   INTEGER NOT NULL,          -- unix seconds, Pi clock (UTC)
     resentAt     INTEGER,
-    leafNodeID   INTEGER NOT NULL REFERENCES leafnode (leafNodeID),
+    leafNodeID   INTEGER NOT NULL REFERENCES leafnode (leafNodeID)
 );
 CREATE INDEX IF NOT EXISTS idx_reading_received ON reading (receivedAt);
 """
