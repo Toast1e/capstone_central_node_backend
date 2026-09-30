@@ -18,13 +18,22 @@ services:
     volumes:
       - weather-data:/data
 
-  # NGINX: serves the dashboard and reverse-proxies /api/ to the ingest
-  # service. The only port published on the Pi.
+  # NGINX: serves the PWA and reverse-proxies /api/ to the ingest service.
+  # The only ports published on the Pi. The PWA is built from its own repo
+  # (central_node_pwa, checked out next to this one) when the image builds.
   web:
-    build: ./web
+    build:
+      context: ./web
+      additional_contexts:
+        pwa: ${PWA_DIR:-../central_node_pwa}
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+      # TLS certificate (see certs/README.md). Without one the app is served
+      # over plain HTTP and can't be installed to a phone's home screen.
+      - ./certs:/etc/nginx/certs:ro
     depends_on:
       - ingest
 

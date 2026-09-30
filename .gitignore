@@ -1,0 +1,2 @@
+# TLS certificate and private key (see certs/README.md)
+certs/*.pem
