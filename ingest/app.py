@@ -80,9 +80,9 @@ CREATE TABLE IF NOT EXISTS reading (
     leafWetness  REAL,
     isSent       BOOLEAN NOT NULL DEFAULT 0,
     isReceived   BOOLEAN NOT NULL DEFAULT 0,
-    sentAt       INTEGER NOT NULL,
+    sentAt       INTEGER,
     receivedAt   INTEGER NOT NULL,          -- unix seconds, Pi clock (UTC)
-    resentAt     INTEGER NOT NULL,
+    resentAt     INTEGER,
     leafNodeID   INTEGER NOT NULL REFERENCES leafnode (leafNodeID),
 
 
@@ -129,18 +129,29 @@ def init_db() -> None:
 
 def store_reading(conn: sqlite3.Connection, d: dict) -> None:
     now = int(time.time())
+    # reading.leafNodeID is required, so a node's first packet registers it
+    conn.execute(
+        """INSERT OR IGNORE INTO leafnode
+           (leafNodeName, leafNodeInstalledAt, lastConnectedAt)
+           VALUES (?,?,?)""",
+        (d["node"], now, now),
+    )
+    leaf_node_id = conn.execute(
+        "SELECT leafNodeID FROM leafnode WHERE leafNodeName = ?", (d["node"],)
+    ).fetchone()[0]
     conn.execute(
         """INSERT INTO reading
-           (receivedAt, node, seq, realTimeLog, temperature, humidity, dewpoint_c,
-            battery_v, battery_pct, sd, rssi, snr)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+           (receivedAt, leafNodeID, node, seq, realTimeLog, temperature, humidity,
+            dewpoint_c, battery_v, battery_pct, sd, rssi, snr)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             now,
+            leaf_node_id,
             d.get("node"),
             d.get("seq"),
-            d.get("realTimeLog"),
-            d.get("temperature"),        # absent keys stay NULL — the sender omits
-            d.get("humidity"),  # failed sensor values on purpose, and the
+            d.get("ts"),
+            d.get("temp_c"),        # absent keys stay NULL — the sender omits
+            d.get("humidity_pct"),  # failed sensor values on purpose, and the
             d.get("dewpoint_c"),    # chart renders NULL as a line gap
             d.get("battery_v"),
             d.get("battery_pct"),
@@ -192,7 +203,7 @@ def serial_reader() -> None:
                     if "node" in d:
                         store_reading(conn, d)
                         print(f"ingest: stored seq={d.get('seq')} "
-                              f"t={d.get('temperature')} rh={d.get('humidity')} "
+                              f"t={d.get('temp_c')} rh={d.get('humidity_pct')} "
                               f"rssi={d.get('rssi')}", flush=True)
         except (serial.SerialException, OSError) as exc:
             with status_lock:
