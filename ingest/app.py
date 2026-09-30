@@ -84,17 +84,6 @@ CREATE TABLE IF NOT EXISTS reading (
     receivedAt   INTEGER NOT NULL,          -- unix seconds, Pi clock (UTC)
     resentAt     INTEGER,
     leafNodeID   INTEGER NOT NULL REFERENCES leafnode (leafNodeID),
-
-
-    
-    node         TEXT,
-    seq          INTEGER,                
-    dewpoint_c   REAL,
-    battery_v    REAL,
-    battery_pct  REAL,
-    sd           INTEGER,
-    rssi         REAL,
-    snr          REAL
 );
 CREATE INDEX IF NOT EXISTS idx_reading_received ON reading (receivedAt);
 """
