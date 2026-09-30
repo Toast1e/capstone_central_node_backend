@@ -12,8 +12,8 @@ One process, two jobs:
        GET /api/status            link health: serial state, last packet age,
                                   counts, estimated missed packets (seq gaps)
 
-Time handling: `received_at` is the Pi's clock (unix seconds, UTC) and is what
-the dashboard charts. The sender's own `ts` (its RTC, set to local time at
+Time handling: `receivedAt` is the Pi's clock (unix seconds, UTC) and is what
+the dashboard charts. The sender's own `realTimeLog` (its RTC, set to local time at
 flash) is stored untouched for cross-checking against the SD card CSVs.
 """
 
@@ -31,14 +31,64 @@ BAUD = int(os.environ.get("BAUD", "115200"))
 DB_PATH = os.environ.get("DB_PATH", "/data/weather.db")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS readings (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    received_at  INTEGER NOT NULL,          -- unix seconds, Pi clock (UTC)
+CREATE TABLE IF NOT EXISTS centralnode (
+    centralNodeID           INTEGER PRIMARY KEY AUTOINCREMENT,
+    centralNodeName         TEXT NOT NULL,
+    centralNodeDescription  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS leafnode (
+    leafNodeID           INTEGER PRIMARY KEY AUTOINCREMENT,
+    leafNodeName         TEXT NOT NULL UNIQUE,
+    leafNodeLongitude    REAL,
+    leafNodeLatitude     REAL,
+    leafNodeStatus       BOOLEAN,
+    leafNodeInstalledAt  INTEGER NOT NULL,
+    leafNodeBattery      INTEGER,
+    lastConnectedAt      INTEGER NOT NULL,
+    blockID              INTEGER            -- REFERENCES block (blockID) once that table exists
+);
+CREATE INDEX IF NOT EXISTS idx_leafnode_block ON leafnode (blockID);
+
+CREATE TABLE IF NOT EXISTS alert (
+    alertID         INTEGER PRIMARY KEY AUTOINCREMENT,
+    alertSeverity   INTEGER,
+    alertMessage    TEXT,
+    raisedAt        INTEGER NOT NULL,
+    sentAt          INTEGER NOT NULL,
+    isAcknowledged  BOOLEAN NOT NULL DEFAULT 0,
+    resolvedAt      INTEGER,                -- NULL while the alert is open
+    centralNodeID   INTEGER REFERENCES centralnode (centralNodeID)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_raised ON alert (raisedAt);
+CREATE INDEX IF NOT EXISTS idx_alert_central ON alert (centralNodeID);
+
+CREATE TABLE IF NOT EXISTS leafnode_alert (
+    bridgeID    INTEGER PRIMARY KEY AUTOINCREMENT,
+    leafNodeID  INTEGER NOT NULL REFERENCES leafnode (leafNodeID),
+    alertID     INTEGER NOT NULL REFERENCES alert (alertID),
+    UNIQUE (leafNodeID, alertID)
+);
+CREATE INDEX IF NOT EXISTS idx_leafnode_alert_alert ON leafnode_alert (alertID);
+
+CREATE TABLE IF NOT EXISTS reading (
+    readingID    INTEGER PRIMARY KEY AUTOINCREMENT,
+    realTimeLog  INTEGER,                   -- sender RTC epoch (as reported)
+    temperature  REAL,
+    humidity     REAL,
+    windSpeed    REAL,
+    leafWetness  REAL,
+    isSent       BOOLEAN NOT NULL DEFAULT 0,
+    isReceived   BOOLEAN NOT NULL DEFAULT 0,
+    sentAt       INTEGER,
+    receivedAt   INTEGER NOT NULL,          -- unix seconds, Pi clock (UTC)
+    resentAt     INTEGER,
+    leafNodeID   INTEGER NOT NULL REFERENCES leafnode (leafNodeID),
+
+
+    
     node         TEXT,
-    seq          INTEGER,
-    ts           INTEGER,                   -- sender RTC epoch (as reported)
-    temp_c       REAL,
-    humidity_pct REAL,
+    seq          INTEGER,                
     dewpoint_c   REAL,
     battery_v    REAL,
     battery_pct  REAL,
@@ -46,7 +96,7 @@ CREATE TABLE IF NOT EXISTS readings (
     rssi         REAL,
     snr          REAL
 );
-CREATE INDEX IF NOT EXISTS idx_readings_received ON readings (received_at);
+CREATE INDEX IF NOT EXISTS idx_reading_received ON reading (receivedAt);
 """
 
 # ---------------------------------------------------------------------------
@@ -79,13 +129,24 @@ def init_db() -> None:
 
 def store_reading(conn: sqlite3.Connection, d: dict) -> None:
     now = int(time.time())
+    # reading.leafNodeID is required, so a node's first packet registers it
     conn.execute(
-        """INSERT INTO readings
-           (received_at, node, seq, ts, temp_c, humidity_pct, dewpoint_c,
-            battery_v, battery_pct, sd, rssi, snr)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT OR IGNORE INTO leafnode
+           (leafNodeName, leafNodeInstalledAt, lastConnectedAt)
+           VALUES (?,?,?)""",
+        (d["node"], now, now),
+    )
+    leaf_node_id = conn.execute(
+        "SELECT leafNodeID FROM leafnode WHERE leafNodeName = ?", (d["node"],)
+    ).fetchone()[0]
+    conn.execute(
+        """INSERT INTO reading
+           (receivedAt, leafNodeID, node, seq, realTimeLog, temperature, humidity,
+            dewpoint_c, battery_v, battery_pct, sd, rssi, snr)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             now,
+            leaf_node_id,
             d.get("node"),
             d.get("seq"),
             d.get("ts"),
@@ -172,7 +233,7 @@ def row_to_dict(row: sqlite3.Row) -> dict:
 def latest() -> dict:
     with db_connect() as conn:
         row = conn.execute(
-            "SELECT * FROM readings ORDER BY received_at DESC, id DESC LIMIT 1"
+            "SELECT * FROM reading ORDER BY receivedAt DESC, readingID DESC LIMIT 1"
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="No readings yet")
@@ -184,12 +245,12 @@ def history(hours: float = Query(24, gt=0, le=504)) -> dict:
     since = int(time.time() - hours * 3600)
     with db_connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM readings WHERE received_at >= ? "
-            "ORDER BY received_at ASC",
+            "SELECT * FROM reading WHERE receivedAt >= ? "
+            "ORDER BY receivedAt ASC",
             (since,),
         ).fetchall()
     return {"hours": hours, "count": len(rows),
-            "readings": [row_to_dict(r) for r in rows]}
+            "reading": [row_to_dict(r) for r in rows]}
 
 
 @app.get("/api/status")

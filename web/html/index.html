@@ -270,7 +270,7 @@ async function refresh(){
     $('f-count').textContent  = status.packets_stored ?? '–';
     $('f-missed').textContent = status.seq_gaps_missed ?? '–';
     if (latestR.ok) renderLatest(await latestR.json());
-    if (histR.ok){ const h = await histR.json(); renderChart(h.readings); }
+    if (histR.ok){ const h = await histR.json(); renderChart(h.reading); }
   }catch(e){
     setLink(null, false);
     $('link-text').textContent = 'dashboard cannot reach the API';
