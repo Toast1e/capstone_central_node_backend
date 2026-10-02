@@ -4,6 +4,9 @@ The Raspberry Pi side of the mildew station. It reads the readings the
 central node receives from the leaf nodes, stores them in a database, and
 serves them, together with the VitiSense app, on the Pi's own Wi-Fi hotspot.
 
+For a non-technical walk through the whole system, from sensor to app, see
+[SYSTEM_GUIDE.md](SYSTEM_GUIDE.md).
+
 ```
 [leaf node]                 [central node]                [Raspberry Pi 4B]
 SHT31 + DS3231              Heltec on USB                 Docker
