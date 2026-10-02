@@ -1,44 +1,61 @@
 # Mildew station dashboard
 
-LoRa weather station → Heltec receiver on the Pi's USB port → Docker
+LoRa leaf nodes → central node (Heltec) on the Pi's USB port → Docker
 (ingest + NGINX) → the VitiSense PWA, served on the Pi's own Wi-Fi hotspot.
 
 ```
-[field node]                [ground station]              [Raspberry Pi 4B]
+[leaf node]                 [central node]                [Raspberry Pi 4B]
 SHT31 + DS3231              Heltec on USB                 Docker
-  │  LoRa 868 MHz             │  NDJSON @115200             ├─ ingest: serial → SQLite → API :8000
-  └──────────────────────────►└────────────────────────────►└─ web: NGINX :80/:443 → PWA + /api proxy
+  │  LoRa 868 MHz  reading ►  │  NDJSON @115200             ├─ ingest: serial → SQLite → API :8000
+  └───────────────◄ Ack ──────└────────────────────────────►└─ web: NGINX :80/:443 → PWA + /api proxy
 ```
 
-The sender firmware is unchanged — its JSON payload is already exactly what
-the gateway forwards. The SD card remains the record of truth; the app is
-the live view.
+Three projects have to agree with each other:
+
+| Project | Runs on | Talks to |
+|---------|---------|----------|
+| [leaf_node_LoRa](https://github.com/Toast1e/leaf_node_LoRa) | each leaf node | the central node, by LoRa |
+| [central_node_LoRa](https://github.com/Toast1e/central_node_LoRa) | the Heltec on the Pi's USB port | leaf nodes by LoRa, this repo's ingest by USB serial |
+| this repo | the Pi | the central node by USB serial, the app by HTTP |
+
+The central node acknowledges every reading and prints each new one as one
+JSON line, whose keys are the `reading` table's column names:
+
+```
+{"leafNodeID":5,"readingID":70000,"realTimeLog":1790940463,"temperature":23.46,"humidity":100,"windSpeed":2,"leafWetness":12,"status":7,"rssi":-87.5,"snr":9.25}
+```
+
+A leaf node that gets no acknowledgement keeps the reading and sends it again
+later, so readings can arrive late and, rarely, twice; the ingest stores each
+one once. The leaf node's SD card remains the record of truth; the app is the
+live view.
 
 The app itself lives in its own repo,
 [central_node_pwa](https://github.com/Toast1e/central_node_pwa). The `web`
 container builds it from a checkout next to this folder and serves it
 together with the API.
 
-## 1. Flash the receiver
+## 1. Flash the central node
 
-`firmware/receiver/` is a PlatformIO project. Open it, check two things
-against your hardware, then upload:
-
-- `LORA_FREQ` — 868.0 must match your board's band variant (it matches the
-  sender, so if the sender transmits, this is right).
-- `LORA_TCXO` — 1.8 V is correct for V3.2+/V4 boards. If `radio.begin()`
-  reports error `-706`/`-707` on an older board, set it to `0`.
-
-All other radio parameters are copied from the sender and must stay identical.
+The receiver is the **central_node_LoRa** project (its own repo). Open it in
+PlatformIO and upload it to the Heltec that will sit on the Pi's USB port.
+Its radio settings (`lib/projectDefinitions`) and packet format
+(`lib/packetHandler/packet.*`) are kept identical to the leaf node's.
 
 Sanity check before touching the Pi: open the serial monitor at 115200. Within
-5 minutes (the sender's log interval) you should see one JSON line per packet:
+5 minutes (the leaf node's interval) you should see, per packet, a
+`Receive: ...` line followed by one JSON line like the one above, and once a
+minute a heartbeat:
 
 ```
-{"node":"mildew-1","seq":12,"ts":1753693500,"temp_c":18.42,...,"rssi":-87.5,"snr":9.25}
+{"gateway":"central-node","uptime_s":600,"rx_ok":2,"rx_duplicate":0,"rx_bad":0}
 ```
 
 The onboard LED also blinks once per received packet.
+
+`firmware/receiver/` in this repo is the earlier receiver. It does not
+acknowledge readings and uses the old radio settings and packet format, so it
+does not work with the current leaf nodes. Do not flash it.
 
 ## 2. Prepare the Pi (once)
 
@@ -118,9 +135,9 @@ internet. It takes several minutes on a Pi 4. Then:
 docker compose logs -f ingest
 ```
 
-You should see `ingest: listening on /dev/lora @ 115200`, the gateway's
-boot lines tagged `[gw]`, and within 5 minutes
-`ingest: stored seq=... t=... rssi=...`.
+You should see `ingest: listening on /dev/lora @ 115200`, the central node's
+other lines tagged `[gw]`, and within 5 minutes
+`ingest: stored node=... reading=... t=... rh=... rssi=...`.
 
 `docker compose logs web` shows whether it's serving HTTP or HTTPS (next
 step).
@@ -177,7 +194,7 @@ ordinary browser tab.
 |---------------------------|------------------------------------------------------|
 | `/api/latest`             | most recent reading                                  |
 | `/api/history?hours=24`   | readings for a window (max 504 h = 21 days)          |
-| `/api/status`             | serial state, last-packet age, counts, seq-gap misses|
+| `/api/status`             | serial state, last-packet age, counts, last packet per leaf node |
 
 The database is a named Docker volume (`weather-data`). Back it up with:
 
@@ -190,12 +207,17 @@ docker compose cp ingest:/data/weather.db ./weather-backup.db
 - **`ingest: serial error` in the logs** — wrong `SERIAL_PORT` in `.env`, or
   the receiver isn't plugged in. Re-check `ls -l /dev/serial/by-id/`, then
   `docker compose up -d` again (compose re-reads `.env`).
-- **Receiver prints heartbeats but never a reading** — radio parameter
-  mismatch. Diff the `#define LORA_*` block against the sender; every value
-  (freq, BW, SF, CR, sync word, preamble) must be identical.
+- **Central node prints heartbeats but never a reading** — radio parameter
+  mismatch. Compare `lib/projectDefinitions/projectDefinitions.h` in the leaf
+  and central node projects; every `LORA_*` value (freq, BW, SF, CR, sync
+  word, preamble) must be identical.
 - **Readings on serial but nothing in the app** — check
-  `docker compose logs ingest` for `bad JSON dropped` lines, and
-  `curl http://localhost/api/status` on the Pi.
+  `docker compose logs ingest` for `bad JSON dropped`, `DATABASE ERROR` or
+  `DATABASE IS FROM AN OLDER VERSION` lines, and
+  `curl http://localhost/api/status` on the Pi. A database made by an older
+  version has different columns: start over with a clean one (below).
+- **Check the ingest without a board** — `python ingest/test_ingest.py` feeds
+  it the central node's lines through a pseudo-terminal.
 - **Changed a file?** Rebuild the affected container:
   `docker compose up -d --build`.
 - **App changes don't show up** — the app is built into the `web` image.
@@ -206,9 +228,12 @@ docker compose cp ingest:/data/weather.db ./weather-backup.db
 
 ## Notes on time
 
-The dashboard charts by the Pi's clock (`received_at`, set by NTP), which is
-robust even if the field node's RTC drifts. The sender's own `ts` is stored
-alongside for cross-checking against the SD card CSVs.
+Each reading carries two times, both unix seconds in UTC. `realTimeLog` is
+when the leaf node took it (its DS3231, set when the node is flashed) and is
+what the API sorts by. `receivedAt` is when the Pi got it. They differ for a
+reading that was queued on the leaf node and sent later (`resentAt` is then
+set). A leaf node whose clock cannot be trusted sends no `realTimeLog`; that
+reading is placed by `receivedAt`, so the Pi's clock still matters.
 
 On the hotspot the Pi usually has no internet, so NTP can't set its clock,
 and the Pi 4 has no battery-backed clock. After a power cut it can be

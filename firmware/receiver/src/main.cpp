@@ -1,4 +1,9 @@
 /* ============================================================================
+   SUPERSEDED - do not flash. The receiver is now the central_node_LoRa project.
+   This earlier version does not acknowledge readings and uses the old radio
+   settings (CR 4/7, sync 0x34) and packet format, so it neither hears the
+   current leaf nodes nor produces lines the ingest service stores.
+   ============================================================================
    Mildew ground station — LoRa → USB serial gateway  |  Heltec ESP32-S3 board
    (WiFi LoRa 32 V3/V4, Wireless Stick V3/V4 — all share the same SX1262 pins)
 
