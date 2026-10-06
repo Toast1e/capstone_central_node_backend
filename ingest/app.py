@@ -254,6 +254,239 @@ def serial_reader() -> None:
 app = FastAPI(title="Mildew station API")
 
 
+# ---------- Home Page ----------
+
+@app.get("/api/leafnodes")
+def get_leaf_nodes(ids: str | None = None) -> dict:
+    '''
+    Return leaf nodes by ID or retrieve all if no ID passed
+        GET /api/leafnodes            -> all leaf nodes, 50 latest readings each
+        GET /api/leafnodes?ids=1,2,3  -> just those nodes, 50 latest readings each
+    '''
+    READINGS_PER_NODE = 50
+    # check for if a leafNodeID/s is passed
+    node_ids = [i.strip() for i in ids.split(",") if i.strip()] if ids else None
+
+    # if leafNodeID/s passed, retrieve node/s by their ID, otherwise return all
+    with db_connect() as conn:
+        if node_ids:
+            placeholders = ", ".join("?" for _ in node_ids)  # string of "?" for each nodeID
+            nodes = conn.execute(
+                f"SELECT * FROM leafnode WHERE leafNodeID IN ({placeholders})",
+                node_ids,
+            ).fetchall()
+        else:
+            nodes = conn.execute("SELECT * FROM leafnode").fetchall()
+
+        result = []
+        for n in nodes:
+            row = dict(n)
+            readings = conn.execute(
+                "SELECT * FROM reading WHERE leafNodeID = ? "
+                "ORDER BY receivedAt DESC, readingID DESC LIMIT ?",
+                (row["leafNodeID"], READINGS_PER_NODE),
+            ).fetchall()
+            row["readingCount"] = len(readings)
+            row["readings"] = [dict(r) for r in readings]
+            result.append(row)
+
+    if node_ids and not result:
+        raise HTTPException(status_code=404, detail="No matching leaf nodes found")
+
+    return {"count": len(result), "leafNodes": result}
+
+
+# ---------- Alerts Page ----------
+
+@app.get("/api/alerts")
+def get_alerts() -> dict:
+    """
+    Return all alerts that have not yet been acknowledged.
+
+    GET /api/alerts
+    """
+    with db_connect() as conn:
+        alert_rows = conn.execute(
+            "SELECT * FROM alert WHERE isAcknowledged = 0 ORDER BY raisedAt DESC"
+        ).fetchall()
+
+        result = []
+        for a in alert_rows:
+            alert = dict(a)
+            alert["isAcknowledged"] = bool(alert["isAcknowledged"])
+
+            nodes = conn.execute(
+                """SELECT ln.leafNodeID, ln.leafNodeName
+                   FROM leafnode_alert la
+                   JOIN leafnode ln ON ln.leafNodeID = la.leafNodeID
+                   WHERE la.alertID = ?""",
+                (alert["alertID"],),
+            ).fetchall()
+            alert["leafNodes"] = [dict(n) for n in nodes]
+
+            result.append(alert)
+
+    return {"count": len(result), "alerts": result}
+
+
+@app.patch("/api/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: int) -> dict:
+    """
+    Mark an alert as acknowledged, and stamp resolvedAt at the same time.
+    """
+    with db_connect() as conn:
+        existing = conn.execute(
+            "SELECT alertID FROM alert WHERE alertID = ?", (alert_id,)
+        ).fetchone()
+        if existing is None:
+            raise HTTPException(404, "Alert not found")
+
+        now = int(time.time())
+        conn.execute(
+            "UPDATE alert SET isAcknowledged = 1, resolvedAt = ? WHERE alertID = ?",
+            (now, alert_id),
+        )
+        conn.commit()
+
+        # return updated value if needed to use
+        updated = conn.execute(
+            "SELECT * FROM alert WHERE alertID = ?", (alert_id,)
+        ).fetchone()
+
+    row = dict(updated)
+    row["isAcknowledged"] = bool(row["isAcknowledged"])
+    return row
+
+
+@app.get("/api/alerts/acknowledged")
+def get_acknowledged_alerts() -> dict:
+    """
+    Return all alerts that have been acknowledged.
+    """
+    with db_connect() as conn:
+        alert_rows = conn.execute(
+            "SELECT * FROM alert WHERE isAcknowledged = 1 ORDER BY resolvedAt DESC"
+        ).fetchall()
+
+        result = []
+        for a in alert_rows:
+            alert = dict(a)
+            nodes = conn.execute(
+                """SELECT ln.leafNodeID, ln.leafNodeName
+                   FROM leafnode_alert la
+                   JOIN leafnode ln ON ln.leafNodeID = la.leafNodeID
+                   WHERE la.alertID = ?""",
+                (alert["alertID"],),
+            ).fetchall()
+            alert["leafNodes"] = [dict(n) for n in nodes]
+            result.append(alert)
+
+    return {"count": len(result), "alerts": result}
+
+
+# ---------- Nodes Page ----------
+
+@app.get("/api/leafnodes/status")
+def get_leaf_node_status() -> dict:
+    """
+    Return every leaf node's current status info only — no reading
+    history. Built for the Nodes page.
+
+    GET /api/leafnodes/status
+    """
+    with db_connect() as conn:
+        nodes = conn.execute(
+            "SELECT leafNodeID, leafNodeName, leafNodeStatus, leafNodeBattery, "
+            "lastConnectedAt, leafNodeInstalledAt, blockID "
+            "FROM leafnode ORDER BY leafNodeID ASC"
+        ).fetchall()
+
+    result = [dict(n) for n in nodes]
+    return {"count": len(result), "leafNodes": result}
+
+
+# ---------- Export Page ----------
+
+# Client-facing field name -> actual reading column.
+ALLOWED_READING_FIELDS = {
+    "temperature": "temperature",
+    "humidity": "humidity",
+    "windSpeed": "windSpeed",
+    "leafWetness": "leafWetness",
+    "battery": "battery_pct",
+}
+
+# Always included, regardless of what the client asked for, so every
+# exported row can still be identified, placed in time, and traced to a node.
+BASE_READING_FIELDS = ["readingID", "leafNodeID", "realTimeLog", "receivedAt"]
+
+
+@app.get("/api/export/readings")
+def export_readings(
+    ids: str | None = None,
+    fields: str | None = None,
+    # the two date parameters are required, no default
+    date_from: date = Query(..., alias="from"),
+    date_to: date = Query(..., alias="to"),
+) -> dict:
+    """
+    Return readings for one or more leaf nodes, with a chosen set of
+    fields, filtered to a date range. Backs the Export page.
+
+    GET /api/export/readings?ids=1,3&fields=temperature,humidity&from=2026-01-01&to=2026-01-24
+    GET /api/export/readings?fields=leafWetness,windSpeed&from=2026-01-01&to=2026-01-24
+        (no "ids" -> all leaf nodes, matches the "All Leaf Nodes" UI option)
+    """
+    # --- validate date range ---
+    if date_from > date_to:
+        raise HTTPException(400, "'from' date must be before or equal to 'to' date")
+
+    # --- convert to Unix seconds ---
+    start_dt = datetime.combine(date_from, dtime.min)
+    end_dt = datetime.combine(date_to + timedelta(days=1), dtime.min)
+
+    # --- validate fields ---
+    if fields:
+        requested = [f.strip() for f in fields.split(",") if f.strip()]
+        invalid = set(requested) - ALLOWED_READING_FIELDS.keys()
+        if invalid:
+            raise HTTPException(400, f"Unknown fields: {sorted(invalid)}")
+    else:
+        requested = list(ALLOWED_READING_FIELDS.keys())
+
+    select_columns = BASE_READING_FIELDS + [ALLOWED_READING_FIELDS[f] for f in requested]
+    column_sql = ", ".join(select_columns)
+
+    # --- leaf node IDs (omit = all nodes) ---
+    node_ids = [i.strip() for i in ids.split(",") if i.strip()] if ids else None
+
+    # --- build query ---
+    sql = f"""
+        SELECT {column_sql}
+        FROM reading
+        WHERE receivedAt >= ? AND receivedAt < ?
+    """
+    params = [int(start_dt.timestamp()), int(end_dt.timestamp())]
+
+    if node_ids:
+        placeholders = ", ".join("?" for _ in node_ids)
+        sql += f" AND leafNodeID IN ({placeholders})"
+        params.extend(node_ids)
+
+    sql += " ORDER BY receivedAt ASC"
+
+    with db_connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+
+    return {
+        "count": len(rows),
+        "from": date_from.isoformat(),
+        "to": date_to.isoformat(),
+        "fields": requested,
+        "readings": [dict(r) for r in rows],
+    }
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
