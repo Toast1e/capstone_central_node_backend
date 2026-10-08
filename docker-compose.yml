@@ -1,3 +1,12 @@
+# Docker keeps everything a container prints, without limit, unless told
+# otherwise. On a Pi that slowly fills the SD card, so each service keeps
+# its newest 30 MB (3 files of 10 MB) and drops the rest.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
 
   # Reads the LoRa gateway's serial output, stores readings in SQLite,
@@ -17,6 +26,7 @@ services:
       - DB_PATH=/data/weather.db
     volumes:
       - weather-data:/data
+    logging: *logging
 
   # NGINX: serves the PWA and reverse-proxies /api/ to the ingest service.
   # The only ports published on the Pi. The PWA is built from its own repo
@@ -36,6 +46,7 @@ services:
       - ./certs:/etc/nginx/certs:ro
     depends_on:
       - ingest
+    logging: *logging
 
 volumes:
   weather-data:
