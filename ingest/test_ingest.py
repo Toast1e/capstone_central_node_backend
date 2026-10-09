@@ -1,6 +1,6 @@
 """
 Checks the ingest service against the exact lines the central node prints,
-without a board: a pseudo-terminal stands in for the USB serial port.
+without a board: a pseudo-terminal stands in for the serial port.
 
 Run from this folder (macOS / Linux / the Pi):
     pip install -r requirements.txt
@@ -63,6 +63,9 @@ threading.Thread(target=app.serial_reader, daemon=True).start()
 wait_for(lambda: app.link["serial_connected"], "serial port opened")
 
 # --- what the central node prints around a reading must not disturb anything
+assert app.status()["gateway_heartbeat_age_s"] is None, "no heartbeat yet"
+send("ESP-ROM:esp32s3-20210327")              # the board's boot loader, seen on the serial pins
+send("rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)")
 send("LoRa front end: GC1109 (V4.2)")
 send("RX ready — listening")
 send('Receive: "{\\"n\\":5,\\"i\\":70000}"  RSSI -87.5 dBm  SNR 9.25 dB')
@@ -88,6 +91,7 @@ status = app.status()
 assert status["packets_stored"] == 5, status
 assert status["duplicates_dropped"] == 1, status
 assert status["gateway_heartbeat"]["rx_ok"] == 1, status
+assert 0 <= status["gateway_heartbeat_age_s"] < 60, status
 assert status["nodes"][5]["readingID"] == 69990 and status["nodes"][5]["status"] == 15, status
 assert set(status["nodes"]) == {5, 6, 7}, status
 

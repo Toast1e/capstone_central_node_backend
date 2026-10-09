@@ -16,7 +16,8 @@ One process, two jobs:
        GET /api/latest            most recent reading
        GET /api/history?hours=24  readings for the chart (max 21 days)
        GET /api/status            link health: serial state, last packet age,
-                                  counts, and the last packet of each leaf node
+                                  last heartbeat age, counts, and the last
+                                  packet of each leaf node
 
 Time handling: `realTimeLog` is when the leaf node took the reading (its RTC,
 unix seconds, UTC) and is what the API sorts by. `receivedAt` is when the Pi
@@ -103,6 +104,9 @@ CREATE INDEX IF NOT EXISTS idx_reading_received ON reading (receivedAt);
 # in-memory link status (shared between the reader thread and the API)
 status_lock = threading.Lock()
 link = {
+    # True while the port is open. On the Pi's serial pins that says nothing
+    # about the central node itself: the port opens with no board wired to it.
+    # Whether the central node is alive is the age of its last heartbeat.
     "serial_connected": False,
     "serial_port": SERIAL_PORT,
     "last_packet_at": None,      # unix seconds
@@ -110,6 +114,7 @@ link = {
     "duplicates_dropped": 0,     # readings a leaf node sent twice (its Ack got lost)
     "nodes": {},                 # leafNodeID -> its last packet: readingID, rssi, snr, status
     "gateway_heartbeat": None,   # last {"gateway": ...} line, verbatim
+    "gateway_heartbeat_at": None,  # unix seconds, when that line arrived
     "started_at": int(time.time()),
 }
 
@@ -230,6 +235,7 @@ def serial_reader() -> None:
                     if "gateway" in d:
                         with status_lock:
                             link["gateway_heartbeat"] = d
+                            link["gateway_heartbeat_at"] = int(time.time())
                         continue
                     if isinstance(d.get("leafNodeID"), int):
                         # A reading that cannot be stored must not end this
@@ -527,5 +533,8 @@ def status() -> dict:
     snap["server_time"] = now
     snap["last_packet_age_s"] = (
         None if snap["last_packet_at"] is None else now - snap["last_packet_at"]
+    )
+    snap["gateway_heartbeat_age_s"] = (
+        None if snap["gateway_heartbeat_at"] is None else now - snap["gateway_heartbeat_at"]
     )
     return snap

@@ -9,7 +9,7 @@ For a non-technical walk through the whole system, from sensor to app, see
 
 ```
 [leaf node]                 [central node]                [Raspberry Pi 4B]
-SHT31 + DS3231              Heltec on USB                 Docker
+SHT31 + DS3231              Heltec on serial pins         Docker
   │  LoRa 868 MHz  reading ►  │  JSON lines @115200         ├─ ingest: serial → SQLite → API :8000
   └───────────────◄ Ack ──────└────────────────────────────►└─ web: NGINX :80/:443 → app + /api proxy
 ```
@@ -19,7 +19,7 @@ SHT31 + DS3231              Heltec on USB                 Docker
 | Project | Runs on | Job |
 |---------|---------|-----|
 | [leaf_node_LoRa](https://github.com/Toast1e/leaf_node_LoRa) | each leaf node | measure, log to SD, send by LoRa |
-| [central_node_LoRa](https://github.com/Toast1e/central_node_LoRa) | the Heltec on the Pi's USB port | receive, acknowledge, print each reading on USB serial |
+| [central_node_LoRa](https://github.com/Toast1e/central_node_LoRa) | the Heltec wired to the Pi's serial pins | receive, acknowledge, print each reading as a line of text |
 | **capstone_central_node_backend** (this repo) | the Pi | store the readings, serve the API and the app |
 | [central_node_pwa](https://github.com/Toast1e/central_node_pwa) | phones, served from the Pi | the VitiSense app |
 
@@ -31,14 +31,14 @@ SHT31 + DS3231              Heltec on USB                 Docker
 | `ingest/test_ingest.py` | checks `app.py` against the central node's output, without a board |
 | `web/` | the NGINX container: builds and serves the app, and forwards `/api/` to `ingest` |
 | `certs/` | where the HTTPS certificate goes (see [certs/README.md](certs/README.md)) |
-| `docker-compose.yml`, `.env.example` | how the two containers are started, and the one setting you must fill in |
+| `docker-compose.yml`, `.env.example` | how the two containers are started, and where the ingest finds the central node |
 | `firmware/receiver/` | an earlier receiver firmware. **Superseded by central_node_LoRa, do not flash it** |
 
 ## How a reading gets here
 
 1. A leaf node takes a reading and sends it by LoRa.
 2. The central node answers with an acknowledgement (*Ack*) and prints the
-   reading on USB serial as one line of JSON:
+   reading on its serial output as one line of JSON:
 
    ```
    {"leafNodeID":5,"readingID":70000,"realTimeLog":1790940463,"temperature":23.46,"humidity":100,"windSpeed":2,"leafWetness":12,"status":7,"rssi":-87.5,"snr":9.25}
@@ -93,7 +93,8 @@ app.
 ### 1. Flash the central node
 
 The receiver is the **central_node_LoRa** project (its own repo). Open it in
-PlatformIO and upload it to the Heltec that will sit on the Pi's USB port.
+PlatformIO and upload it, over USB, to the Heltec that will be wired to the
+Pi.
 Its radio settings (`lib/projectDefinitions`) and packet format
 (`lib/packetHandler/packet.*`) are kept identical to the leaf node's.
 
@@ -128,6 +129,22 @@ sudo usermod -aG docker $USER
 
 Verify: `docker --version` and `docker compose version` both answer.
 
+#### Serial port
+
+The central node is wired to the Pi's serial pins. That port is off on a new
+Pi, and when it is on, Raspberry Pi OS puts a login console on it, which
+would take the lines meant for the ingest. So switch the port on and the
+console off:
+
+```bash
+sudo raspi-config nonint do_serial_hw 0     # the serial port: on
+sudo raspi-config nonint do_serial_cons 1   # the login console on it: off
+sudo reboot
+```
+
+(`sudo raspi-config` → Interface Options → Serial Port asks the same two
+questions.) After the restart `ls -l /dev/serial0` shows the port.
+
 #### Wi-Fi hotspot
 
 Phones join the Pi's own Wi-Fi to use the app. Raspberry Pi OS's
@@ -158,24 +175,33 @@ git clone https://github.com/Toast1e/central_node_pwa.git
 The app is built from whatever is checked out in `central_node_pwa`, so
 switch branches there if you're deploying one that isn't merged yet.
 
-### 4. Point it at the central node's serial port
+### 4. Wire the central node to the Pi
 
-Plug the central node into the Pi, then:
+With the Pi switched off, connect four jumper wires between the Heltec and
+the Pi's 40-pin header:
+
+| Heltec pin | Pi 4B pin |
+|------------|-----------|
+| `TX` (GPIO43) | pin 10 (GPIO15, RXD) |
+| `GND` | pin 6 (GND) |
+| `5V` | pin 2 or 4 (5V) |
+| `RX` (GPIO44), optional | pin 8 (GPIO14, TXD) |
+
+The details, and what to do before plugging a USB cable into the Heltec, are
+in central_node_LoRa's README ("Wiring to the Pi").
+
+`.env.example` already names the serial pins, so the env file needs no
+editing:
 
 ```bash
 cd ~/central-node/capstone_central_node_backend
-ls -l /dev/serial/by-id/
+cp .env.example .env      # SERIAL_PORT=/dev/serial0
 ```
 
-You'll see something like
-`usb-Espressif_USB_JTAG_serial_debug_unit_...` (the WiFi LoRa 32 V4, which
-has USB built into its processor) or `usb-Silicon_Labs_CP2102_...` (boards
-with a separate USB chip). Put that full path in the env file:
-
-```bash
-cp .env.example .env
-nano .env      # SERIAL_PORT=/dev/serial/by-id/usb-...-if00
-```
+A central node plugged into one of the Pi's USB ports works too, because the
+firmware prints the same lines there. Then `SERIAL_PORT` is its full path
+under `ls -l /dev/serial/by-id/`, such as
+`/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_...-if00`.
 
 ### 5. Build and start
 
@@ -197,8 +223,9 @@ other lines tagged `[gw]`, and within 5 minutes
 `docker compose logs web` shows whether it's serving HTTP or HTTPS (next
 step).
 
-Only one program can read the serial port at a time: close any serial
-monitor that is open on the central node before starting the containers.
+A serial monitor on the Heltec's USB port doesn't get in the way: the ingest
+reads the pins. Only when the central node is connected to the Pi by USB can
+one program read it at a time.
 
 ### 6. HTTPS (needed to install the app)
 
@@ -271,16 +298,18 @@ ordinary browser tab.
  "packets_stored":812,"duplicates_dropped":3,
  "nodes":{"5":{"last_packet_at":1790940465,"readingID":70000,"status":7,"rssi":-87.5,"snr":9.25}},
  "gateway_heartbeat":{"gateway":"central-node","uptime_s":600,"rx_ok":2,"rx_duplicate":0,"rx_bad":0},
- "started_at":1790900000,"server_time":1790940470,"last_packet_age_s":5}
+ "gateway_heartbeat_at":1790940440,"started_at":1790900000,"server_time":1790940470,
+ "last_packet_age_s":5,"gateway_heartbeat_age_s":30}
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `serial_connected` | the ingest has the central node's serial port open |
+| `serial_connected` | the ingest has the serial port open. On the Pi's serial pins that is also true with no central node wired to it, so check `gateway_heartbeat_age_s` as well |
 | `last_packet_age_s` | seconds since any reading arrived. Leaf nodes send every 5 minutes |
 | `packets_stored`, `duplicates_dropped` | counts since the ingest started |
 | `nodes` | per leaf node: when it was last heard, its own reading number, its `status`, and the signal quality |
-| `gateway_heartbeat` | the central node's last once-a-minute heartbeat line. If `uptime_s` stops growing, the central node has stopped |
+| `gateway_heartbeat` | the central node's last once-a-minute heartbeat line |
+| `gateway_heartbeat_age_s` | seconds since that heartbeat arrived. More than about two minutes, or `null` a few minutes after the ingest started: the central node has stopped, or its wire to the Pi is loose |
 
 These numbers are kept in memory and start again from zero when the ingest
 container restarts. The readings themselves are in the database.
@@ -314,10 +343,19 @@ prints (`Packet::toRecordJson` in central_node_LoRa).
 
 ## Troubleshooting
 
-- **`ingest: serial error` in the logs** — wrong `SERIAL_PORT` in `.env`,
-  the central node isn't plugged in, or a serial monitor has the port open.
-  Re-check `ls -l /dev/serial/by-id/`, then `docker compose up -d` again
-  (compose re-reads `.env`).
+- **`ingest: serial error` in the logs, or the ingest container doesn't
+  start** — `SERIAL_PORT` in `.env` names a device that isn't there. For the
+  serial pins it is `/dev/serial0`, which only exists once the port is
+  switched on (step 2, then a restart). For a central node on USB, re-check
+  `ls -l /dev/serial/by-id/`. Then `docker compose up -d` again (compose
+  re-reads `.env`).
+- **`listening on /dev/lora` but no heartbeat within a few minutes**
+  (`gateway_heartbeat_age_s` stays `null`) — nothing is arriving on the
+  serial pins. Check the Heltec's `TX` wire goes to the Pi's pin 10 and
+  `GND` to a ground pin, that the Heltec has power, and that it runs the
+  current central_node_LoRa firmware (older versions only print on USB).
+  If `[gw]` lines arrive with pieces missing, the login console is probably
+  still on the port (step 2).
 - **Heartbeats arrive (`gateway_heartbeat` in `/api/status`) but never a
   reading** — the central node is running but hears no leaf node. Usually a
   radio settings mismatch: compare

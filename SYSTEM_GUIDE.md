@@ -21,9 +21,9 @@ current conditions and warn when they favour powdery or downy mildew.
 
 ```
    IN THE VINEYARD                      AT THE BASE
- ┌────────────────┐   radio    ┌────────────────┐  USB   ┌────────────────┐  Wi-Fi  ┌───────┐
+ ┌────────────────┐   radio    ┌────────────────┐  short ┌────────────────┐  Wi-Fi  ┌───────┐
  │   Leaf node    │ ─────────► │  Central node  │ ─────► │  Raspberry Pi  │ ──────► │ Phone │
- │ sensor + clock │ ◄───────── │ radio receiver │  cable │ database + app │         │  app  │
+ │ sensor + clock │ ◄───────── │ radio receiver │  wires │ database + app │         │  app  │
  │ + memory card  │  "got it"  │                │        │     server     │         │       │
  └────────────────┘            └────────────────┘        └────────────────┘         └───────┘
 ```
@@ -31,7 +31,7 @@ current conditions and warn when they favour powdery or downy mildew.
 | Part | Where it is | What it does |
 |------|-------------|--------------|
 | **Leaf node** (one or more) | in the vineyard | measures, saves a copy on its memory card, sends the reading by radio |
-| **Central node** | at the base, plugged into the Raspberry Pi | receives readings from every leaf node, confirms each one, passes it to the Pi |
+| **Central node** | at the base, wired to the Raspberry Pi | receives readings from every leaf node, confirms each one, passes it to the Pi |
 | **Raspberry Pi** | at the base | stores readings in a database, and provides the Wi-Fi network and the app |
 | **VitiSense app** | on a phone | shows the conditions and mildew alerts |
 
@@ -121,9 +121,9 @@ The central node listens all the time. When a reading arrives it:
 
 1. checks that the message is complete and undamaged;
 2. sends the Ack back to the leaf node straight away;
-3. passes the reading to the Raspberry Pi through the USB cable, as one line
-   of text, this time with full names and the strength of the radio signal
-   added:
+3. passes the reading to the Raspberry Pi through the wires between them,
+   as one line of text, this time with full names and the strength of the
+   radio signal added:
 
 ```
 {"leafNodeID":5,"readingID":812,"realTimeLog":1790940463,"temperature":23.46,"humidity":61.2,"windSpeed":2,"leafWetness":12,"status":7,"rssi":-87.5,"snr":9.25}
@@ -232,7 +232,7 @@ The system is built so that one failure does not stop everything else.
 | Term | Meaning |
 |------|---------|
 | **Leaf node** | a sensor station in the vineyard |
-| **Central node** | the radio receiver at the base, plugged into the Raspberry Pi |
+| **Central node** | the radio receiver at the base, wired to the Raspberry Pi |
 | **Raspberry Pi** | a small, low-cost computer |
 | **LoRa** | "Long Range": a radio technology for sending small messages over long distances using very little power |
 | **Acknowledgement (Ack)** | a short reply confirming that a message was received |
