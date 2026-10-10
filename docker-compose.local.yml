@@ -1,0 +1,10 @@
+# Local testing on a laptop only. Do NOT use on the Pi.
+# Merged on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build ingest
+services:
+  ingest:
+    # no LoRa radio on the laptop, and Docker Desktop on Windows can't pass serial devices in
+    devices: !reset []
+    # publish the API so the frontend can reach http://localhost:8000
+    ports:
+      - "8000:8000"
