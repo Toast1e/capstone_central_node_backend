@@ -16,28 +16,28 @@ SHT31 + DS3231              Heltec on USB                 Docker
 
 ## Where it fits
 
-| Project | Runs on | Job |
-|---------|---------|-----|
-| [leaf_node_LoRa](https://github.com/Toast1e/leaf_node_LoRa) | each leaf node | measure, log to SD, send by LoRa |
+| Project                                                           | Runs on                         | Job                                                    |
+| ----------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
+| [leaf_node_LoRa](https://github.com/Toast1e/leaf_node_LoRa)       | each leaf node                  | measure, log to SD, send by LoRa                       |
 | [central_node_LoRa](https://github.com/Toast1e/central_node_LoRa) | the Heltec on the Pi's USB port | receive, acknowledge, print each reading on USB serial |
-| **capstone_central_node_backend** (this repo) | the Pi | store the readings, serve the API and the app |
-| [central_node_pwa](https://github.com/Toast1e/central_node_pwa) | phones, served from the Pi | the VitiSense app |
+| **capstone_central_node_backend** (this repo)                     | the Pi                          | store the readings, serve the API and the app          |
+| [central_node_pwa](https://github.com/Toast1e/central_node_pwa)   | phones, served from the Pi      | the VitiSense app                                      |
 
 ## What is in this repo
 
-| Path | What it is |
-|------|------------|
-| `ingest/app.py` | one Python program: reads the central node's serial output into SQLite, and serves the API |
-| `ingest/test_ingest.py` | checks `app.py` against the central node's output, without a board |
-| `web/` | the NGINX container: builds and serves the app, and forwards `/api/` to `ingest` |
-| `certs/` | where the HTTPS certificate goes (see [certs/README.md](certs/README.md)) |
-| `docker-compose.yml`, `.env.example` | how the two containers are started, and the one setting you must fill in |
-| `firmware/receiver/` | an earlier receiver firmware. **Superseded by central_node_LoRa, do not flash it** |
+| Path                                 | What it is                                                                                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `ingest/app.py`                      | one Python program: reads the central node's serial output into SQLite, and serves the API |
+| `ingest/test_ingest.py`              | checks `app.py` against the central node's output, without a board                         |
+| `web/`                               | the NGINX container: builds and serves the app, and forwards `/api/` to `ingest`           |
+| `certs/`                             | where the HTTPS certificate goes (see [certs/README.md](certs/README.md))                  |
+| `docker-compose.yml`, `.env.example` | how the two containers are started, and the one setting you must fill in                   |
+| `firmware/receiver/`                 | an earlier receiver firmware. **Superseded by central_node_LoRa, do not flash it**         |
 
 ## How a reading gets here
 
 1. A leaf node takes a reading and sends it by LoRa.
-2. The central node answers with an acknowledgement (*Ack*) and prints the
+2. The central node answers with an acknowledgement (_Ack_) and prints the
    reading on USB serial as one line of JSON:
 
    ```
@@ -60,17 +60,17 @@ database is the live view.
 
 Each reading becomes one row of the `reading` table:
 
-| Column | Comes from | Meaning |
-|--------|------------|---------|
-| `readingID` | the database | row number. **Not** the leaf node's own reading number |
-| `leafNodeID` | the line | which leaf node took the reading |
-| `realTimeLog` | the line | when the reading was taken: unix seconds, UTC, from the leaf node's clock. Empty if that clock could not be trusted |
-| `temperature`, `humidity` | the line | °C and %. Empty if the sensor failed, never `0` |
-| `windSpeed`, `leafWetness` | the line | placeholder values until the leaf node has those sensors |
-| `receivedAt` | the Pi's clock | when the line arrived: unix seconds, UTC |
-| `sentAt` | the line | set to `realTimeLog`: a reading is first sent as soon as it is taken |
-| `resentAt` | the line | only for a reading the leaf node sent again from its queue: when it was sent again |
-| `isSent`, `isReceived` | the ingest | always `1` for a stored reading |
+| Column                     | Comes from     | Meaning                                                                                                             |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `readingID`                | the database   | row number. **Not** the leaf node's own reading number                                                              |
+| `leafNodeID`               | the line       | which leaf node took the reading                                                                                    |
+| `realTimeLog`              | the line       | when the reading was taken: unix seconds, UTC, from the leaf node's clock. Empty if that clock could not be trusted |
+| `temperature`, `humidity`  | the line       | °C and %. Empty if the sensor failed, never `0`                                                                     |
+| `windSpeed`, `leafWetness` | the line       | placeholder values until the leaf node has those sensors                                                            |
+| `receivedAt`               | the Pi's clock | when the line arrived: unix seconds, UTC                                                                            |
+| `sentAt`                   | the line       | set to `realTimeLog`: a reading is first sent as soon as it is taken                                                |
+| `resentAt`                 | the line       | only for a reading the leaf node sent again from its queue: when it was sent again                                  |
+| `isSent`, `isReceived`     | the ingest     | always `1` for a stored reading                                                                                     |
 
 A leaf node is added to the `leafnode` table by its first reading, under the
 ID it transmits and the name `leaf-<ID>`; `lastConnectedAt` is updated by
@@ -240,26 +240,44 @@ Join the `CentralNode` Wi-Fi, then open the app in the browser:
 
 To put the app icon on the home screen (HTTPS only):
 
-- **Android (Chrome):** ⋮ menu → *Install app*
-- **iPhone (Safari):** Share → *Add to Home Screen*
+- **Android (Chrome):** ⋮ menu → _Install app_
+- **iPhone (Safari):** Share → _Add to Home Screen_
 
-Without HTTPS, *Add to Home Screen* still makes an icon, but it opens as an
+Without HTTPS, _Add to Home Screen_ still makes an icon, but it opens as an
 ordinary browser tab.
 
 ## API
 
-| Endpoint                  | Returns                                              |
-|---------------------------|------------------------------------------------------|
-| `/api/latest`             | the most recently taken reading (404 until there is one) |
-| `/api/history?hours=24`   | the readings taken in the last N hours, oldest first (max 504 h = 21 days) |
-| `/api/status`             | whether the central node is connected, and the last packet of each leaf node |
+| Endpoint                             | Returns                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `/api/leafnodes`                     | every leaf node with its 50 latest readings (`?ids=1,2` for just those nodes)              |
+| `/api/leafnodes/status`              | every leaf node's status and connection quality (`GOOD`, `LOW`, `NONE`), no readings       |
+| `/api/leafnodes/{id}/details`        | one leaf node's newest reading, signal and location (404 if it doesn't exist)              |
+| `PATCH /api/leafnodes/{id}/location` | set a leaf node's `blockID`, `row`, `latitude` or `longitude`; only the fields sent change |
+| `/api/alerts`                        | alerts that have not been acknowledged                                                     |
+| `/api/alerts/acknowledged`           | alerts that have been acknowledged                                                         |
+| `PATCH /api/alerts/{id}/acknowledge` | mark an alert acknowledged and set `resolvedAt` (404 if it doesn't exist)                  |
+| `/api/centralnode`                   | the central node's name, uptime, free storage and serial state                             |
+| `PATCH /api/centralnode`             | rename the central node (max 50 characters)                                                |
+| `/api/export/readings`               | readings as a CSV or JSON download, between `from` and `to` (both required)                |
 
 `/api/latest` returns one row of the `reading` table:
 
 ```json
-{"readingID":812,"realTimeLog":1790940463,"temperature":23.46,"humidity":100.0,
- "windSpeed":2.0,"leafWetness":12.0,"isSent":1,"isReceived":1,"sentAt":1790940463,
- "receivedAt":1790940465,"resentAt":null,"leafNodeID":5}
+{
+  "readingID": 812,
+  "realTimeLog": 1790940463,
+  "temperature": 23.46,
+  "humidity": 100.0,
+  "windSpeed": 2.0,
+  "leafWetness": 12.0,
+  "isSent": 1,
+  "isReceived": 1,
+  "sentAt": 1790940463,
+  "receivedAt": 1790940465,
+  "resentAt": null,
+  "leafNodeID": 5
+}
 ```
 
 `/api/history` returns `{"hours":24.0,"count":288,"reading":[ ...rows... ]}`.
@@ -267,20 +285,41 @@ ordinary browser tab.
 `/api/status`:
 
 ```json
-{"serial_connected":true,"serial_port":"/dev/lora","last_packet_at":1790940465,
- "packets_stored":812,"duplicates_dropped":3,
- "nodes":{"5":{"last_packet_at":1790940465,"readingID":70000,"status":7,"rssi":-87.5,"snr":9.25}},
- "gateway_heartbeat":{"gateway":"central-node","uptime_s":600,"rx_ok":2,"rx_duplicate":0,"rx_bad":0},
- "started_at":1790900000,"server_time":1790940470,"last_packet_age_s":5}
+{
+  "serial_connected": true,
+  "serial_port": "/dev/lora",
+  "last_packet_at": 1790940465,
+  "packets_stored": 812,
+  "duplicates_dropped": 3,
+  "nodes": {
+    "5": {
+      "last_packet_at": 1790940465,
+      "readingID": 70000,
+      "status": 7,
+      "rssi": -87.5,
+      "snr": 9.25
+    }
+  },
+  "gateway_heartbeat": {
+    "gateway": "central-node",
+    "uptime_s": 600,
+    "rx_ok": 2,
+    "rx_duplicate": 0,
+    "rx_bad": 0
+  },
+  "started_at": 1790900000,
+  "server_time": 1790940470,
+  "last_packet_age_s": 5
+}
 ```
 
-| Field | Meaning |
-|-------|---------|
-| `serial_connected` | the ingest has the central node's serial port open |
-| `last_packet_age_s` | seconds since any reading arrived. Leaf nodes send every 5 minutes |
-| `packets_stored`, `duplicates_dropped` | counts since the ingest started |
-| `nodes` | per leaf node: when it was last heard, its own reading number, its `status`, and the signal quality |
-| `gateway_heartbeat` | the central node's last once-a-minute heartbeat line. If `uptime_s` stops growing, the central node has stopped |
+| Field                                  | Meaning                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `serial_connected`                     | the ingest has the central node's serial port open                                                              |
+| `last_packet_age_s`                    | seconds since any reading arrived. Leaf nodes send every 5 minutes                                              |
+| `packets_stored`, `duplicates_dropped` | counts since the ingest started                                                                                 |
+| `nodes`                                | per leaf node: when it was last heard, its own reading number, its `status`, and the signal quality             |
+| `gateway_heartbeat`                    | the central node's last once-a-minute heartbeat line. If `uptime_s` stops growing, the central node has stopped |
 
 These numbers are kept in memory and start again from zero when the ingest
 container restarts. The readings themselves are in the database.

@@ -772,12 +772,6 @@ def get_central_node() -> dict:
         "centralNodeID": row["centralNodeID"],
         "name": row["centralNodeName"],
         "description": row["centralNodeDescription"],
-        "uptimeSeconds": uptime_s,
-        "storageFreePct": round(usage.free / usage.total * 100),
-        "serialConnected": serial_ok,
-        "databaseOk": True,
-        "hotspot": None,
-        "phonesConnected": None,
     }
 
 
