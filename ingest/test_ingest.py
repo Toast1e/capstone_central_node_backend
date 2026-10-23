@@ -123,6 +123,26 @@ with sqlite3.connect(os.environ["DB_PATH"]) as conn:
     nodes = conn.execute("SELECT leafNodeID, leafNodeName, leafNodeStatus FROM leafnode ORDER BY 1").fetchall()
 assert nodes == [(5, "leaf-5", 1), (6, "leaf-6", 1), (7, "leaf-7", 1)], nodes
 
+# --- leaf node settings can be updated independently
+renamed = app.rename_leaf_node(5, app.LeafNodeRename(name="  North block  "))
+assert renamed == {"leafNodeID": 5, "leafNodeName": "North block"}, renamed
+coordinates = app.update_leaf_node_coordinates(
+    5, app.LeafNodeCoordinates(latitude=-33.92, longitude=18.42)
+)
+assert coordinates == {"leafNodeID": 5, "latitude": -33.92, "longitude": 18.42}, coordinates
+with sqlite3.connect(os.environ["DB_PATH"]) as conn:
+    node = conn.execute(
+        "SELECT leafNodeName, leafNodeLatitude, leafNodeLongitude "
+        "FROM leafnode WHERE leafNodeID = 5"
+    ).fetchone()
+assert node == ("North block", -33.92, 18.42), node
+try:
+    app.rename_leaf_node(5, app.LeafNodeRename(name="leaf-6"))
+except app.HTTPException as exc:
+    assert exc.status_code == 409, exc.status_code
+else:
+    raise AssertionError("duplicate leaf node name was accepted")
+
 # --- a database error must not stop the reader: later readings still get stored
 with sqlite3.connect(os.environ["DB_PATH"]) as conn:
     conn.execute("ALTER TABLE reading RENAME TO reading_hidden")

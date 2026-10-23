@@ -711,6 +711,15 @@ class LocationUpdate(BaseModel):
     longitude: float | None = None
 
 
+class LeafNodeRename(BaseModel):
+    name: str = Field(max_length=50)
+
+
+class LeafNodeCoordinates(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
 # client field -> leafnode column
 LOCATION_COLUMNS = {
     "blockID": "blockID",
@@ -743,6 +752,46 @@ def set_leaf_node_location(leaf_node_id: int, body: LocationUpdate) -> dict:
         if cur.rowcount == 0:
             raise HTTPException(404, "Leaf node not found")
     return {"leafNodeID": leaf_node_id, **sent}
+
+
+@app.patch("/api/leafnodes/{leaf_node_id}/name")
+def rename_leaf_node(leaf_node_id: int, body: LeafNodeRename) -> dict:
+    """Rename a leaf node."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Name can't be empty")
+
+    with db_connect() as conn:
+        try:
+            cur = conn.execute(
+                "UPDATE leafnode SET leafNodeName = ? WHERE leafNodeID = ?",
+                (name, leaf_node_id),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(409, "A leaf node with that name already exists") from exc
+        if cur.rowcount == 0:
+            raise HTTPException(404, "Leaf node not found")
+        conn.commit()
+    return {"leafNodeID": leaf_node_id, "leafNodeName": name}
+
+
+@app.patch("/api/leafnodes/{leaf_node_id}/coordinates")
+def update_leaf_node_coordinates(leaf_node_id: int, body: LeafNodeCoordinates) -> dict:
+    """Set a leaf node's latitude and longitude."""
+    with db_connect() as conn:
+        cur = conn.execute(
+            "UPDATE leafnode SET leafNodeLatitude = ?, leafNodeLongitude = ? "
+            "WHERE leafNodeID = ?",
+            (body.latitude, body.longitude, leaf_node_id),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(404, "Leaf node not found")
+        conn.commit()
+    return {
+        "leafNodeID": leaf_node_id,
+        "latitude": body.latitude,
+        "longitude": body.longitude,
+    }
 
 
 @app.get("/api/centralnode")

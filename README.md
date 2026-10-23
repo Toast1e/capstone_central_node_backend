@@ -253,6 +253,8 @@ ordinary browser tab.
 | `/api/leafnodes`                     | every leaf node with its 50 latest readings (`?ids=1,2` for just those nodes)              |
 | `/api/leafnodes/status`              | every leaf node's status and connection quality (`GOOD`, `LOW`, `NONE`), no readings       |
 | `/api/leafnodes/{id}/details`        | one leaf node's newest reading, signal and location (404 if it doesn't exist)              |
+| `PATCH /api/leafnodes/{id}/name`     | rename a leaf node with `{"name":"..."}` (max 50 characters; 404 if it doesn't exist)     |
+| `PATCH /api/leafnodes/{id}/coordinates` | set `latitude` and `longitude` together (ranges: -90..90 and -180..180)                 |
 | `PATCH /api/leafnodes/{id}/location` | set a leaf node's `blockID`, `row`, `latitude` or `longitude`; only the fields sent change |
 | `/api/alerts`                        | alerts that have not been acknowledged                                                     |
 | `/api/alerts/acknowledged`           | alerts that have been acknowledged                                                         |
