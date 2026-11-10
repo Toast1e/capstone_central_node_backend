@@ -158,6 +158,12 @@ git clone https://github.com/Toast1e/central_node_pwa.git
 The app is built from whatever is checked out in `central_node_pwa`, so
 switch branches there if you're deploying one that isn't merged yet.
 
+The app's login checks the password against a hash in
+`central_node_pwa/.env` (`NEXT_PUBLIC_PASSWORD_HASH`, see the app's README).
+That file isn't in git, so a clone doesn't have it: copy it into
+`central_node_pwa/` on the Pi before building. The build picks it up when
+it's there. Without it the app builds, but nobody can log in.
+
 ### 4. Point it at the central node's serial port
 
 Plug the central node into the Pi, then:
