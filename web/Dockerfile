@@ -11,7 +11,13 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=pwa package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-COPY --from=pwa next.config.ts tsconfig.json postcss.config.mjs ./
+# .env holds the hash of the app's login password (NEXT_PUBLIC_PASSWORD_HASH),
+# which the build bundles into the app. It isn't in git, so it is copied only
+# when it's there: "[v]" makes it a pattern, and a pattern may match nothing.
+# Without it the app builds, but nobody can log in.
+# .env.local is left out on purpose: it holds a developer's own settings, like
+# the address of the API on their laptop.
+COPY --from=pwa next.config.ts tsconfig.json postcss.config.mjs .en[v] ./
 COPY --from=pwa src ./src
 COPY --from=pwa public ./public
 # Google Fonts are downloaded here and bundled into out/, so the app is fully

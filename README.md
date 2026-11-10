@@ -60,17 +60,17 @@ database is the live view.
 
 Each reading becomes one row of the `reading` table:
 
-| Column | Comes from | Meaning |
-|--------|------------|---------|
-| `readingID` | the database | row number. **Not** the leaf node's own reading number |
-| `leafNodeID` | the line | which leaf node took the reading |
-| `realTimeLog` | the line | when the reading was taken: unix seconds, UTC, from the leaf node's clock. Empty if that clock could not be trusted |
-| `temperature`, `humidity` | the line | °C and %. Empty if the sensor failed, never `0` |
-| `windSpeed`, `leafWetness` | the line | placeholder values until the leaf node has those sensors |
-| `receivedAt` | the Pi's clock | when the line arrived: unix seconds, UTC |
-| `sentAt` | the line | set to `realTimeLog`: a reading is first sent as soon as it is taken |
-| `resentAt` | the line | only for a reading the leaf node sent again from its queue: when it was sent again |
-| `isSent`, `isReceived` | the ingest | always `1` for a stored reading |
+| Column                     | Comes from     | Meaning                                                                                                             |
+| -------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `readingID`                | the database   | row number. **Not** the leaf node's own reading number                                                              |
+| `leafNodeID`               | the line       | which leaf node took the reading                                                                                    |
+| `realTimeLog`              | the line       | when the reading was taken: unix seconds, UTC, from the leaf node's clock. Empty if that clock could not be trusted |
+| `temperature`, `humidity`  | the line       | °C and %. Empty if the sensor failed, never `0`                                                                     |
+| `windSpeed`, `leafWetness` | the line       | placeholder values until the leaf node has those sensors                                                            |
+| `receivedAt`               | the Pi's clock | when the line arrived: unix seconds, UTC                                                                            |
+| `sentAt`                   | the line       | set to `realTimeLog`: a reading is first sent as soon as it is taken                                                |
+| `resentAt`                 | the line       | only for a reading the leaf node sent again from its queue: when it was sent again                                  |
+| `isSent`, `isReceived`     | the ingest     | always `1` for a stored reading                                                                                     |
 
 A leaf node is added to the `leafnode` table by its first reading, under the
 ID it transmits and the name `leaf-<ID>`; `lastConnectedAt` is updated by
@@ -175,6 +175,12 @@ git clone https://github.com/Toast1e/central_node_pwa.git
 The app is built from whatever is checked out in `central_node_pwa`, so
 switch branches there if you're deploying one that isn't merged yet.
 
+The app's login checks the password against a hash in
+`central_node_pwa/.env` (`NEXT_PUBLIC_PASSWORD_HASH`, see the app's README).
+That file isn't in git, so a clone doesn't have it: copy it into
+`central_node_pwa/` on the Pi before building. The build picks it up when
+it's there. Without it the app builds, but nobody can log in.
+
 ### 4. Wire the central node to the Pi
 
 With the Pi switched off, connect four jumper wires between the Heltec and
@@ -267,26 +273,46 @@ Join the `CentralNode` Wi-Fi, then open the app in the browser:
 
 To put the app icon on the home screen (HTTPS only):
 
-- **Android (Chrome):** ⋮ menu → *Install app*
-- **iPhone (Safari):** Share → *Add to Home Screen*
+- **Android (Chrome):** ⋮ menu → _Install app_
+- **iPhone (Safari):** Share → _Add to Home Screen_
 
-Without HTTPS, *Add to Home Screen* still makes an icon, but it opens as an
+Without HTTPS, _Add to Home Screen_ still makes an icon, but it opens as an
 ordinary browser tab.
 
 ## API
 
-| Endpoint                  | Returns                                              |
-|---------------------------|------------------------------------------------------|
-| `/api/latest`             | the most recently taken reading (404 until there is one) |
-| `/api/history?hours=24`   | the readings taken in the last N hours, oldest first (max 504 h = 21 days) |
-| `/api/status`             | whether the central node is connected, and the last packet of each leaf node |
+| Endpoint                             | Returns                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `/api/leafnodes`                     | every leaf node with its 50 latest readings (`?ids=1,2` for just those nodes)              |
+| `/api/leafnodes/status`              | every leaf node's status and connection quality (`GOOD`, `LOW`, `NONE`), no readings       |
+| `/api/leafnodes/{id}/details`        | one leaf node's newest reading, signal and location (404 if it doesn't exist)              |
+| `PATCH /api/leafnodes/{id}/name`     | rename a leaf node with `{"name":"..."}` (max 50 characters; 404 if it doesn't exist)     |
+| `PATCH /api/leafnodes/{id}/coordinates` | set `latitude` and `longitude` together (ranges: -90..90 and -180..180)                 |
+| `PATCH /api/leafnodes/{id}/location` | set a leaf node's `blockID`, `row`, `latitude` or `longitude`; only the fields sent change |
+| `/api/alerts`                        | alerts that have not been acknowledged                                                     |
+| `/api/alerts/acknowledged`           | alerts that have been acknowledged                                                         |
+| `PATCH /api/alerts/{id}/acknowledge` | mark an alert acknowledged and set `resolvedAt` (404 if it doesn't exist)                  |
+| `/api/centralnode`                   | the central node's name, uptime, free storage and serial state                             |
+| `PATCH /api/centralnode`             | rename the central node (max 50 characters)                                                |
+| `/api/export/readings`               | readings as a CSV or JSON download, between `from` and `to` (both required)                |
 
 `/api/latest` returns one row of the `reading` table:
 
 ```json
-{"readingID":812,"realTimeLog":1790940463,"temperature":23.46,"humidity":100.0,
- "windSpeed":2.0,"leafWetness":12.0,"isSent":1,"isReceived":1,"sentAt":1790940463,
- "receivedAt":1790940465,"resentAt":null,"leafNodeID":5}
+{
+  "readingID": 812,
+  "realTimeLog": 1790940463,
+  "temperature": 23.46,
+  "humidity": 100.0,
+  "windSpeed": 2.0,
+  "leafWetness": 12.0,
+  "isSent": 1,
+  "isReceived": 1,
+  "sentAt": 1790940463,
+  "receivedAt": 1790940465,
+  "resentAt": null,
+  "leafNodeID": 5
+}
 ```
 
 `/api/history` returns `{"hours":24.0,"count":288,"reading":[ ...rows... ]}`.
